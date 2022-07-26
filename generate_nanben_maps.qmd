@@ -9,7 +9,6 @@ execute:
   echo: false
   warning: false
   message: false
-
 ---
 
 ## Data Description
@@ -56,10 +55,9 @@ Nanben_members %>%
 
 <br>
 
-The original Nanben member list had `r Nanben_members %>% nrow()` people. 4 members don't have state/city/zip code listed and have been removed. There are also 13 Nanben members outside the US (Canada, Chennai, UK, Dubai, etc) who were removed from the data. The below state maps are of the `r Nanben_members %>% nrow() - 4 - 13 ` US based Nanben members. 
+The original Nanben member list had `r Nanben_members %>% nrow()` people. 4 members don't have state/city/zip code listed and have been removed. There are also 13 Nanben members outside the US (Canada, Chennai, UK, Dubai, etc) who were removed from the data. The below state maps are of the `r Nanben_members %>% nrow() - 4 - 13` US based Nanben members.
 
-The point based maps use the center of the zip code of the member if provided. If zip code is not available, then we make use of the center of the City and State. For these maps an additional 6 members were removed because they only provided State information and not City or zip code. These point based maps of the  `r Nanben_members %>% nrow() - 4 - 13 -6` US based Nanben members with adequate data. 
-
+The point based maps use the center of the zip code of the member if provided. If zip code is not available, then we make use of the center of the City and State. For these maps an additional 6 members were removed because they only provided State information and not City or zip code. These point based maps of the `r Nanben_members %>% nrow() - 4 - 13 -6` US based Nanben members with adequate data.
 
 ```{r}
 #| echo: false
@@ -170,7 +168,6 @@ data_with_points = data_with_zips %>%
 
 ```
 
-
 ```{r}
 
 cities_for_geocoding =
@@ -209,6 +206,7 @@ data_with_points_appended = data_with_points %>%
 ## Static Maps
 
 ### Nanben Members by State
+
 ```{r}
 
 # ---- Make maps ------
@@ -235,6 +233,7 @@ Nanben_member_state_map
 ```
 
 ### Nanben Members as Points
+
 ```{r}
 Nanben_member_point_map = data_with_points_appended %>%
   st_transform(st_crs(Nanben_member_counts_by_state)) %>% 
@@ -260,10 +259,10 @@ Nanben_member_point_map
 
 ```
 
-
 ## Interactive Maps
 
 ### Nanben Members by State
+
 ```{r}
 Nanben_member_counts_by_state %>% 
   select(state, n) %>% 
@@ -282,6 +281,7 @@ Nanben_member_counts_by_state %>%
 ```
 
 ### Nanben Members as Points
+
 ```{r}
 data_with_points_appended %>% 
   select(first_name, last_name, city) %>% 
