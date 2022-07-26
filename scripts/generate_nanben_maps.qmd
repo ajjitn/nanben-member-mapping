@@ -1,0 +1,301 @@
+---
+title: "Mapping Nanben Members"
+format: 
+  html:
+    fig-width: 10
+    fig-height: 8
+editor: visual
+execute:
+  echo: false
+  warning: false
+  message: false
+
+---
+
+## Data Description
+
+```{r clean_data}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(urbnmapr)
+library(urbnthemes)
+library(tigris)
+library(zipcodeR)
+library(readxl)
+library(mapview)
+library(sf)
+library(tidylog)
+library(here)
+library(leafpop)
+library(leaflet)
+
+mapviewOptions(fgb = FALSE)
+options(tigris_use_cache = TRUE)
+
+# --- Read in Data ----
+Nanben_members = read_excel(here("data", "july_2022_member_mapping.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  mutate(uuid = row_number())
+
+original_number = Nanben_members %>% nrow()
+
+cities_for_geocoding = Nanben_members %>% 
+  mutate(f_address = str_c(city, state, sep = ", ")) %>% 
+  select(uuid, f_address)
+
+# We upload this to the Urban geocoder
+cities_for_geocoding %>% 
+  write_csv(here("data", "cities_for_geocoding.csv"))
+
+Nanben_members %>% 
+  rmarkdown::paged_table()
+```
+
+<br>
+
+The original Nanben member list had `r Nanben_members %>% nrow()` people. 4 members don't have state/city/zip code listed and have been removed. There are also 13 Nanben members outside the US (Canada, Chennai, UK, Dubai, etc) who were removed from the data. The below state maps are of the `r Nanben_members %>% nrow() - 4 - 13 ` US based Nanben members. 
+
+The point based maps use the center of the zip code of the member if provided. If zip code is not available, then we make use of the center of the City and State. For these maps an additional 6 members were removed because they only provided State information and not City or zip code. These point based maps of the  `r Nanben_members %>% nrow() - 4 - 13 -6` US based Nanben members with adequate data. 
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+
+# 4 members don't have state listed, 106 members don't have zip code listed
+# Nanben_members %>% 
+#   count(is.na(zip_code), is.na(state))
+
+# Do some data cleaning
+us_Nanben_members = Nanben_members %>% 
+  # 4 members don't have city, state or zip code listed
+  filter(!(is.na(city) & is.na(state) & is.na(zip_code))) %>% 
+  # There's 1 Nanben member in the UK with a UK zip who we filter out for now
+  filter(state != "Brampton") %>% 
+  filter(! state %in% c("ON", "UAE", "NSW", "BC")) %>% 
+  # 2 members in Chennai we are also filtering out
+  filter(!city %in% c("Chennai")) %>% 
+
+  separate(zip_code, 
+           into = c("zip_code", "zip_5_9"),
+           sep = "-") %>% 
+  # Some folks have inputted wrong zip code, lets manually correct
+  mutate(zip_code = case_when(
+    email == "sethuferrari@gmail.com" ~ "01886",
+    TRUE ~ zip_code
+  )) %>% 
+  # Some states show up as "Ak or "Az"
+  mutate(state = str_to_upper(state)) %>% 
+  # Someone inputted TX as TC, so we manually correct
+  mutate(state =  case_when(
+    city == "Plano" & state == "TC" ~ "TX",
+    TRUE ~ state
+  )) %>% 
+  mutate(is_zcta = zipcodeR::is_zcta(zip_code),
+         is_in_zipcoder_lib = case_when(
+           zip_code %in% zip_code_db$zipcode ~ TRUE,
+           TRUE ~ FALSE
+         ))
+
+
+## Generate state specific data
+state_data = urbnmapr::get_urbn_map("states", sf = TRUE) %>% 
+  tigris::shift_geometry()
+  
+data_with_states = us_Nanben_members %>% 
+  # 12 Nanben members are in ON, UAE, or NSW (Canada, Dubai, and Australia) and were not joined
+  tidylog::left_join(state_data,
+                     by = c("state" = "state_abbv")) %>% 
+  st_as_sf()
+
+Nanben_member_counts_by_state = data_with_states %>% 
+  st_drop_geometry() %>% 
+  count(state) %>% 
+  tidylog::right_join(state_data, by = c("state" = "state_abbv")) %>% 
+  st_as_sf() %>% 
+  # Replace NAs from join with 0 for count
+  replace_na(list(n=0))
+
+
+# data_with_states %>% 
+#   filter(!is_zcta) 
+
+## Generate zcta specific data
+zctas = tigris::zctas(cb = TRUE,
+                      # refresh = TRUE,
+                      class = "sf",
+                      # For some reason only setting year = 2019 works
+                      year = 2019,
+                      progress_bar = FALSE)
+
+zctas = zctas %>% 
+  janitor::clean_names() %>% 
+  select(zcta = zcta5ce10)
+
+data_with_zips = data_with_states %>% 
+  st_drop_geometry() %>% 
+  left_join(zctas, by = c("zip_code" = "zcta")) %>% 
+  st_as_sf()
+
+Nanben_member_counts_by_zip = data_with_zips %>% 
+  st_drop_geometry() %>% 
+  count(zip_code) %>% 
+  tidylog::right_join(zctas, by = c("zip_code" = "zcta")) %>% 
+  st_as_sf() %>% 
+  # Replace NAs from join with 0 for count
+  replace_na(list(n=0))
+
+
+## Generate point data
+data_with_points = data_with_zips %>% 
+  st_drop_geometry() %>% 
+  # Use zip centroids when zip is availabe. The zip centroids are from the
+  # zip_code_db in the zipcodeR pkg
+  left_join(zip_code_db %>% 
+              select(zip_code = zipcode, 
+                     zipcode_type, 
+                     post_office_city,
+                     zipcode_state = state, 
+                     lat,
+                     lng, 
+                     timezone,
+                     population, 
+                     housing_units),
+            by = c("zip_code"))
+
+```
+
+
+```{r}
+
+cities_for_geocoding =
+  read_csv(here("data", "final-data/cities_for_geocoding-geocoded.csv"))
+
+# ---- Append city lat/longs for missing zips -----
+
+data_with_points_appended = data_with_points %>% 
+  left_join(cities_for_geocoding %>% 
+              # There are 11 rows without Na lat/longs, which show up as 0
+              mutate(Latitude = if_else(Latitude == 0, NA_real_, Latitude),
+                     Longitude = if_else(Longitude == 0, NA_real_, Longitude)) %>% 
+              select(f_address, match_address = Match_addr, 
+                     lng_city = Longitude, 
+                     lat_city = Latitude,
+                     uuid),
+            by = "uuid") %>% 
+  mutate(lat = case_when(
+          is.na(lat) ~ lat_city,
+          TRUE ~ lat
+          ),
+         lng = case_when(
+           is.na(lng) ~ lng_city,
+           TRUE ~ lng
+         ),
+  ) %>% 
+  # There are still 6 people with just state info. For now we filter them out 
+  filter(!is.na(lat)) %>% 
+  # Now finally convert to sf now that there are no more NA values for lat/lng
+  st_as_sf(
+    coords = c("lng", "lat"),
+    crs = 4326
+  )
+```
+
+## Static Maps
+
+### Nanben Members by State
+```{r}
+
+# ---- Make maps ------
+set_urbn_defaults(style = "map")
+
+sf_use_s2(FALSE)
+
+Nanben_member_state_map = Nanben_member_counts_by_state %>% 
+  ggplot(aes(fill = n)) +
+  geom_sf(color = "white", lwd = 0.6) +
+  scale_fill_stepsn(colors = palette_urbn_green, 
+                    name= "Count",
+                    n.breaks = 6,
+                    guide = guide_colorbar(barheight = 5,
+                                           frame.linewidth = 0,
+                                           ticks = FALSE),
+                    show.limits = TRUE
+                    ) +
+  theme(legend.title = element_text(size=14),
+        legend.text = element_text(size = 12))
+
+Nanben_member_state_map
+
+```
+
+### Nanben Members as Points
+```{r}
+Nanben_member_point_map = data_with_points_appended %>%
+  st_transform(st_crs(Nanben_member_counts_by_state)) %>% 
+  st_jitter(factor = 0.009) %>% 
+  select(geometry, everything()) %>% 
+  # sample_n(10) %>% 
+  ggplot() +
+  geom_sf(data = Nanben_member_counts_by_state, 
+          fill = palette_urbn_gray[5],
+          color = "white",
+          lwd = 0.6) +
+  # # Trying a heatmap
+  # stat_density2d(aes(x = lng_city, y = lat_city, fill = ..density..), 
+  #                geom = 'tile', 
+  #                contour = F, 
+  #                alpha = .5)
+  geom_sf(alpha = 0.15,
+          size = 2, 
+          color = palette_urbn_red[5],
+          stroke = FALSE)
+  
+Nanben_member_point_map
+
+```
+
+
+## Interactive Maps
+
+### Nanben Members by State
+```{r}
+Nanben_member_counts_by_state %>% 
+  select(state, n) %>% 
+  mapview(zcol = "n", 
+          layer.name= "Count",
+          col.regions = palette_urbn_green,
+          map.types = "CartoDB.Positron",
+          alpha.regions = 0.75,
+          legend.opacity = 0.75,
+          popup = popupTable(Nanben_member_counts_by_state,
+                             zcol = c("state","state_name","n"),
+                             feature.id = FALSE,
+                             row.numbers = FALSE)
+  )
+
+```
+
+### Nanben Members as Points
+```{r}
+data_with_points_appended %>% 
+  select(first_name, last_name, city) %>% 
+  mapview(
+          layer.name= "Nanben Members",
+          col.regions = palette_urbn_green[6],
+          map.types = "CartoDB.Positron",
+          alpha.regions = 0.2,
+          cex = 2.5,
+          lwd = 0.1,
+          legend.opacity = 0.75,
+          popup = popupTable(data_with_points_appended,
+                             zcol = c("first_name","last_name","city"),
+                             feature.id = FALSE,
+                             row.numbers = FALSE))
+
+```
